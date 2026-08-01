@@ -24,13 +24,55 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from utils.predict import ModelBundle
 from utils.optimization import FormulationOptimizer, MultiObjectiveFormulationOptimizer, VariableSpec
 
-CA_DIR = os.path.join(os.path.dirname(__file__), "..", "CA", "models")
-IFT_DIR = os.path.join(os.path.dirname(__file__), "..", "IFT", "models")
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+CA_DIR = os.path.join(ROOT, "CA", "models")
+IFT_DIR = os.path.join(ROOT, "IFT", "models")
 
-ALL_NPS = [f"NP{i}" for i in range(11)]
-ALL_CHEMS = [f"chem{i}" for i in range(8)]
-ROCK_TYPES = ["R1", "R2", "R3", "R4", "R5"]
-SAMPLE_STATES = ["S1", "S2", "S3", "S4", "S5"]
+# ---------- Display Name -> Model Code ----------
+NP_MAP = {
+    "None": "NP0",
+    "SiO₂": "NP1",
+    "Al₂O₃": "NP2",
+    "TiO₂": "NP3",
+    "Fe₃O₄": "NP4",
+    "NiO": "NP5",
+    "ZrO₂": "NP6",
+    "CuO": "NP7",
+    "Carbon Nanotubes (CN)": "NP8",
+    "MgO": "NP9",
+    "ZnO": "NP10",
+}
+
+CHEM_MAP = {
+    "Anionic Surfactant": "chem1",
+    "Cationic Surfactant": "chem2",
+    "Nonionic Surfactant": "chem3",
+    "Biosurfactant": "chem4",
+    "Alcohol / Solvent": "chem5",
+    "Anionic Polymer": "chem6",
+    "Nonionic Polymer": "chem7",
+}
+
+ROCK_MAP = {
+    "Limestone": "R1",
+    "Sandstone": "R2",
+    "Glass": "R3",
+    "Dolomite": "R4",
+    "Carbonate": "R5",
+}
+
+SAMPLE_STATE_MAP = {
+    "Oil Aged": "S1",
+    "Nano Aged": "S2",
+    "HS Nano": "S3",
+    "LS Nano": "S4",
+    "Surfactant Aged": "S5",
+}
+
+ALL_NPS = list(NP_MAP.keys())
+ALL_CHEMS = list(CHEM_MAP.keys())
+ROCK_TYPES = list(ROCK_MAP.keys())
+SAMPLE_STATES = list(SAMPLE_STATE_MAP.keys())
 
 st.set_page_config(page_title="Nano-cEOR CA / IFT Calculator", layout="wide")
 
@@ -50,8 +92,11 @@ def sidebar_mode():
 def ca_inputs(prefix="ca"):
     c1, c2, c3 = st.columns(3)
     with c1:
-        rock = st.selectbox("Rock Type", ROCK_TYPES, key=f"{prefix}_rock")
-        sample_state = st.selectbox("Sample State", SAMPLE_STATES, key=f"{prefix}_state")
+	rock_name = st.selectbox("Rock Type", ROCK_TYPES, key=f"{prefix}_rock")
+	sample_name = st.selectbox("Sample State", SAMPLE_STATES, key=f"{prefix}_state")
+
+	rock = ROCK_MAP[rock_name]
+	sample_state = SAMPLE_STATE_MAP[sample_name]        
         porosity = st.number_input("Porosity (%)", 5.0, 60.0, 20.0, key=f"{prefix}_por")
         permeability = st.number_input("Permeability (mD)", 0.01, 3000.0, 50.0, key=f"{prefix}_perm")
     with c2:
@@ -62,13 +107,15 @@ def ca_inputs(prefix="ca"):
     with c3:
         api = st.number_input("API Gravity", 10.0, 75.0, 33.0, key=f"{prefix}_api")
         viscosity = st.number_input("Nanofluid Viscosity (cP)", 0.3, 20.0, 1.0, key=f"{prefix}_visc")
-        nps = st.selectbox("NP Type", ALL_NPS, key=f"{prefix}_nps")
+        np_name = st.selectbox("Nanoparticle", ALL_NPS, key=f"{prefix}_nps")
+	nps = NP_MAP[np_name]
         np_size = st.number_input("NP Size (nm)", 0.0, 100.0, 20.0, key=f"{prefix}_npsize")
     c4, c5 = st.columns(2)
     with c4:
         np_conc = st.number_input("NP Concentration (wt%)", 0.0, 2.0, 0.3, key=f"{prefix}_npconc")
     with c5:
-        chem = st.selectbox("Chemical Additive", ALL_CHEMS, key=f"{prefix}_chem")
+        chem_name = st.selectbox("Chemical Additive", ALL_CHEMS, key=f"{prefix}_chem")
+	chem = CHEM_MAP[chem_name]
         chem_conc = st.number_input("Additive Concentration (wt%)", 0.0, 2.0, 0.1, key=f"{prefix}_chemconc")
 
     return {
@@ -91,12 +138,14 @@ def ift_inputs(prefix="ift"):
         api = st.number_input("API Gravity", 10.0, 75.0, 33.0, key=f"{prefix}_api")
         viscosity = st.number_input("Aqueous Viscosity (cP)", 0.3, 20.0, 1.0, key=f"{prefix}_visc")
     with c3:
-        nps = st.selectbox("NP Type", ALL_NPS, key=f"{prefix}_nps")
+        np_name = st.selectbox("Nanoparticle", ALL_NPS, key=f"{prefix}_nps")
+	nps = NP_MAP[np_name]
         np_size = st.number_input("NP Size (nm)", 0.0, 100.0, 20.0, key=f"{prefix}_npsize")
         np_conc = st.number_input("NP Concentration (wt%)", 0.0, 2.0, 0.3, key=f"{prefix}_npconc")
     c4, c5 = st.columns(2)
     with c4:
-        chem = st.selectbox("Chemical Additive", ALL_CHEMS, key=f"{prefix}_chem")
+        chem_name = st.selectbox("Chemical Additive", ALL_CHEMS, key=f"{prefix}_chem")
+	chem = CHEM_MAP[chem_name]
     with c5:
         chem_conc = st.number_input("Additive Concentration (wt%)", 0.0, 2.0, 0.1, key=f"{prefix}_chemconc")
 
