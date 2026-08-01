@@ -81,12 +81,15 @@ ROCK_TYPE_MAP = {
 }
 
 # Sample / aging state encoding (CA model only).
+# Confirmed against the paper's text ("oil-aged samples (S1)... high-salinity
+# nanofluid-aged samples (S3)... low-salinity (S4)") and the full mapping
+# supplied by the user.
 SAMPLE_STATE_MAP = {
-    "S1": "Oil-aged",
-    "S2": "As-received",
-    "S3": "High-salinity nanofluid-aged",
-    "S4": "Low-salinity nanofluid-aged",
-    "S5": "Other",
+    "S1": "Oil Aged",
+    "S2": "Nano Aged",
+    "S3": "HS Nano Aged",
+    "S4": "LS Nano Aged",
+    "S5": "Surfactant Aged",
 }
 
 
