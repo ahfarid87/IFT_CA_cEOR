@@ -93,6 +93,28 @@ SAMPLE_STATE_MAP = {
 }
 
 
+def enforce_domain_rules(input_dict: dict) -> dict:
+    """
+    Enforce physically-required consistency between a categorical "type"
+    field and its associated continuous "amount" field(s):
+
+      * NPs == "NP0" ("None")     -> NPs Size (nm) = 0, NPs Conc. (wt%) = 0
+      * Chemical Additive == "chem0" ("None") -> Additive Conc. (wt%) = 0
+
+    This is applied at every inference entry point (TabularPreprocessor.
+    transform_single, and therefore also every optimizer trial that calls
+    it) so a formulation can never be scored as "0.3 wt% of no nanoparticle."
+    Training data is left untouched - this only affects inference-time rows.
+    """
+    row = dict(input_dict)
+    if row.get("NPs") == "NP0":
+        row["NPs Size (nm)"] = 0.0
+        row["NPs Conc. (wt%)"] = 0.0
+    if row.get("Chemical Additive") == "chem0":
+        row["Additive Conc. (wt%)"] = 0.0
+    return row
+
+
 @dataclass
 class PreprocessConfig:
     """Configuration describing how a given dataset should be preprocessed."""
@@ -244,6 +266,7 @@ class TabularPreprocessor:
         fitted transform pipeline. Missing keys are treated as NaN and
         will be median-imputed.
         """
+        input_dict = enforce_domain_rules(input_dict)
         cont = self.cfg.continuous_features
         cat = self.cfg.categorical_features
         row = {}
