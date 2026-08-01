@@ -67,6 +67,19 @@ OPTIMIZABLE_BOUNDS = {
     "Additive Conc. (wt%)": (0.0, 1.0),
 }
 
+# --------------------------------------------------------------------------- #
+# Branding                                                                     #
+# --------------------------------------------------------------------------- #
+# Drop the actual institutional logo files here (not included in this repo -
+# official KFUPM / CPG marks are trademarked and must be sourced directly
+# from the institution, not generated or scraped). Any PNG/JPG/SVG placed at
+# these paths will render automatically; if a file is missing, that logo
+# slot is simply skipped (no broken-image icon).
+LOGO_DIR = os.path.join(ROOT, "deployment", "assets")
+KFUPM_LOGO_PATH = os.path.join(LOGO_DIR, "kfupm_logo.png")
+CPG_LOGO_PATH = os.path.join(LOGO_DIR, "cpg_logo.png")
+COPYRIGHT_NOTICE = "© 2026 Ahmed Ibrahim. All rights reserved."
+
 st.set_page_config(page_title="Nano-cEOR CA / IFT Calculator", layout="wide")
 
 
@@ -84,6 +97,8 @@ def sidebar_mode():
     st.sidebar.title("Nano-cEOR Calculator")
     property_choice = st.sidebar.radio("Property", ["Contact Angle (CA)", "Interfacial Tension (IFT)", "Both (multi-objective)"])
     mode = st.sidebar.radio("Mode", ["Prediction", "Optimization"])
+    st.sidebar.markdown("---")
+    st.sidebar.caption(COPYRIGHT_NOTICE)
     return property_choice, mode
 
 
@@ -126,26 +141,54 @@ def render_fluid_fields(prefix: str, temp_key: str = "Temp.") -> dict:
 
 def render_formulation_fields(skip: set, prefix: str) -> dict:
     """NP type/size/conc + chemical additive type/conc - each one is omitted
-    if it's in `skip` (because it's being optimized instead of held fixed)."""
+    if it's in `skip` (because it's being optimized instead of held fixed).
+
+    Domain rule enforced live in the UI: selecting "None" for NP type or
+    Chemical Additive locks the corresponding amount field(s) at 0, since
+    "0.3 wt% of no nanoparticle" is not a physically meaningful input. The
+    same rule is also enforced server-side (utils.preprocessing.
+    enforce_domain_rules) so it holds even if a widget is skipped/optimized.
+    """
     values = {}
     shown_any = False
     cols = st.columns(2)
     with cols[0]:
+        nps_value = None
         if "NPs" not in skip:
-            values["NPs"] = st.selectbox("NP Type", ALL_NPS, format_func=fmt_np, key=f"{prefix}_nps")
+            nps_value = st.selectbox("NP Type", ALL_NPS, format_func=fmt_np, key=f"{prefix}_nps")
+            values["NPs"] = nps_value
             shown_any = True
+        np_is_none = (nps_value == "NP0")
         if "NPs Size (nm)" not in skip:
-            values["NPs Size (nm)"] = st.number_input("NP Size (nm)", 0.0, 100.0, 20.0, key=f"{prefix}_npsize")
+            if np_is_none:
+                st.number_input("NP Size (nm)", value=0.0, disabled=True, key=f"{prefix}_npsize",
+                                 help="Locked at 0 - NP Type is set to None.")
+                values["NPs Size (nm)"] = 0.0
+            else:
+                values["NPs Size (nm)"] = st.number_input("NP Size (nm)", 0.0, 100.0, 20.0, key=f"{prefix}_npsize")
             shown_any = True
         if "NPs Conc. (wt%)" not in skip:
-            values["NPs Conc. (wt%)"] = st.number_input("NP Concentration (wt%)", 0.0, 2.0, 0.3, key=f"{prefix}_npconc")
+            if np_is_none:
+                st.number_input("NP Concentration (wt%)", value=0.0, disabled=True, key=f"{prefix}_npconc",
+                                 help="Locked at 0 - NP Type is set to None.")
+                values["NPs Conc. (wt%)"] = 0.0
+            else:
+                values["NPs Conc. (wt%)"] = st.number_input("NP Concentration (wt%)", 0.0, 2.0, 0.3, key=f"{prefix}_npconc")
             shown_any = True
     with cols[1]:
+        chem_value = None
         if "Chemical Additive" not in skip:
-            values["Chemical Additive"] = st.selectbox("Chemical Additive", ALL_CHEMS, format_func=fmt_chem, key=f"{prefix}_chem")
+            chem_value = st.selectbox("Chemical Additive", ALL_CHEMS, format_func=fmt_chem, key=f"{prefix}_chem")
+            values["Chemical Additive"] = chem_value
             shown_any = True
+        chem_is_none = (chem_value == "chem0")
         if "Additive Conc. (wt%)" not in skip:
-            values["Additive Conc. (wt%)"] = st.number_input("Additive Concentration (wt%)", 0.0, 2.0, 0.1, key=f"{prefix}_chemconc")
+            if chem_is_none:
+                st.number_input("Additive Concentration (wt%)", value=0.0, disabled=True, key=f"{prefix}_chemconc",
+                                 help="Locked at 0 - Chemical Additive is set to None.")
+                values["Additive Conc. (wt%)"] = 0.0
+            else:
+                values["Additive Conc. (wt%)"] = st.number_input("Additive Concentration (wt%)", 0.0, 2.0, 0.1, key=f"{prefix}_chemconc")
             shown_any = True
     if not shown_any:
         st.caption("All formulation variables below are being optimized (see above).")
@@ -305,8 +348,30 @@ def optimization_mode(property_choice):
                            else hist_df.set_index("trial")["value"].cummax())
 
 
+def render_header_logos():
+    """Show institutional logos if present at deployment/assets/*.png; skip
+    silently otherwise. See LOGO_DIR note above for where to add the files."""
+    kfupm_exists = os.path.exists(KFUPM_LOGO_PATH)
+    cpg_exists = os.path.exists(CPG_LOGO_PATH)
+    if not (kfupm_exists or cpg_exists):
+        return
+    cols = st.columns([1, 1, 4])
+    if kfupm_exists:
+        with cols[0]:
+            st.image(KFUPM_LOGO_PATH, width=120)
+    if cpg_exists:
+        with cols[1]:
+            st.image(CPG_LOGO_PATH, width=120)
+
+
+def render_footer():
+    st.markdown("---")
+    st.caption(COPYRIGHT_NOTICE)
+
+
 def main():
     property_choice, mode = sidebar_mode()
+    render_header_logos()
     st.title("Nanoparticle-Assisted EOR — CA / IFT Calculator")
     st.caption("Prediction and formulation-optimization tool built on validated XGBoost models "
                "(Scientific Reports 2026 CA framework + companion IFT framework).")
@@ -314,6 +379,7 @@ def main():
         prediction_mode(property_choice)
     else:
         optimization_mode(property_choice)
+    render_footer()
 
 
 if __name__ == "__main__":
