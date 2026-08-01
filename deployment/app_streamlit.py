@@ -5,19 +5,29 @@ Reference Streamlit front-end for the CA / IFT nano-cEOR calculator,
 structured the same way as the team's earlier activated-carbon adsorption
 calculator (Prediction Mode + Optimization Mode).
 
-All dropdowns DISPLAY the human-readable label (e.g. "ZrO2", "Biosurfactant",
-"Limestone") but still SEND the underlying code (e.g. "NP6", "chem4", "R1")
-to the model, via Streamlit's `format_func`. The category dictionaries live
-once in `utils/preprocessing.py` (NP_TYPE_MAP, CHEM_ADDITIVE_MAP,
-ROCK_TYPE_MAP, SAMPLE_STATE_MAP) so labels can never drift out of sync
-between the notebooks and this app.
+Design notes
+------------
+* All categorical dropdowns DISPLAY the human-readable label (e.g. "ZrO2",
+  "Biosurfactant", "Limestone") but still SEND the underlying code (e.g.
+  "NP6", "chem4", "R1") to the model, via Streamlit's `format_func`. The
+  category dictionaries live once in `utils/preprocessing.py` so labels can
+  never drift out of sync between the notebooks and this app.
+
+* Oil SG is NOT collected from the user - it is a deterministic function of
+  API gravity (SG = 141.5 / (API + 131.5)) and is computed internally right
+  before the row is sent to the model, for both CA and IFT.
+
+* Optimization Mode only allows optimizing FORMULATION variables (NP type,
+  NP size, NP concentration, chemical additive type, additive concentration)
+  - i.e. the things an engineer is actually designing. Reservoir/operating
+  conditions (rock type, porosity, permeability, salinity, temperature,
+  fluid properties) are always treated as fixed context. Whichever
+  formulation variable is selected for optimization is automatically
+  removed from the "fixed conditions" form (no more redundant/ignored
+  input box for a variable that's about to be searched over).
 
 Run locally with:
     streamlit run deployment/app_streamlit.py
-
-Deploy on Streamlit Community Cloud the same way the adsorption calculator
-was deployed - point it at this file, with `CA/models/` and `IFT/models/`
-(and the `utils/` package) included in the repo.
 """
 
 import os
@@ -48,12 +58,26 @@ fmt_chem = lambda code: f"{CHEM_ADDITIVE_MAP[code]} ({code})"
 fmt_rock = lambda code: f"{ROCK_TYPE_MAP[code]} ({code})"
 fmt_state = lambda code: f"{SAMPLE_STATE_MAP[code]} ({code})"
 
+# The only variables the optimizer is allowed to search over - i.e. the
+# formulation the engineer is designing, not the reservoir/operating context.
+OPTIMIZABLE_FIELDS = ["NPs", "NPs Size (nm)", "NPs Conc. (wt%)", "Chemical Additive", "Additive Conc. (wt%)"]
+OPTIMIZABLE_BOUNDS = {
+    "NPs Size (nm)": (0.0, 100.0),
+    "NPs Conc. (wt%)": (0.0, 1.5),
+    "Additive Conc. (wt%)": (0.0, 1.0),
+}
+
 st.set_page_config(page_title="Nano-cEOR CA / IFT Calculator", layout="wide")
 
 
 @st.cache_resource
 def load_bundle(model_dir, prefix):
     return ModelBundle(model_dir, prefix)
+
+
+def sg_from_api(api: float) -> float:
+    """Standard oilfield correlation: SG = 141.5 / (API + 131.5)."""
+    return 141.5 / (api + 131.5)
 
 
 def sidebar_mode():
@@ -63,67 +87,92 @@ def sidebar_mode():
     return property_choice, mode
 
 
-def ca_inputs(prefix="ca"):
-    c1, c2, c3 = st.columns(3)
+# --------------------------------------------------------------------------- #
+# Reusable field groups                                                       #
+# --------------------------------------------------------------------------- #
+def render_reservoir_fields(prefix: str) -> dict:
+    """Rock type / sample state / porosity / permeability - CA model only, always fixed."""
+    c1, c2 = st.columns(2)
     with c1:
         rock = st.selectbox("Rock Type", ROCK_TYPES, format_func=fmt_rock, key=f"{prefix}_rock")
         sample_state = st.selectbox("Sample State", SAMPLE_STATES, format_func=fmt_state, key=f"{prefix}_state")
+    with c2:
         porosity = st.number_input("Porosity (%)", 5.0, 60.0, 20.0, key=f"{prefix}_por")
         permeability = st.number_input("Permeability (mD)", 0.01, 3000.0, 50.0, key=f"{prefix}_perm")
-    with c2:
-        salinity = st.number_input("Salinity (ppm)", 0.0, 200000.0, 30000.0, key=f"{prefix}_sal")
-        temp = st.number_input("Temperature (C)", 15.0, 100.0, 25.0, key=f"{prefix}_temp")
-        oil_visc = st.number_input("Oil Viscosity (cP)", 0.5, 300.0, 20.0, key=f"{prefix}_oilvisc")
-        oil_sg = st.number_input("Oil SG", 0.6, 1.0, 0.86, key=f"{prefix}_oilsg")
-    with c3:
-        api = st.number_input("API Gravity", 10.0, 75.0, 33.0, key=f"{prefix}_api")
-        viscosity = st.number_input("Nanofluid Viscosity (cP)", 0.3, 20.0, 1.0, key=f"{prefix}_visc")
-        nps = st.selectbox("NP Type", ALL_NPS, format_func=fmt_np, key=f"{prefix}_nps")
-        np_size = st.number_input("NP Size (nm)", 0.0, 100.0, 20.0, key=f"{prefix}_npsize")
-    c4, c5 = st.columns(2)
-    with c4:
-        np_conc = st.number_input("NP Concentration (wt%)", 0.0, 2.0, 0.3, key=f"{prefix}_npconc")
-    with c5:
-        chem = st.selectbox("Chemical Additive", ALL_CHEMS, format_func=fmt_chem, key=f"{prefix}_chem")
-        chem_conc = st.number_input("Additive Concentration (wt%)", 0.0, 2.0, 0.1, key=f"{prefix}_chemconc")
-
-    return {
-        "Rock Type": rock, "Sample State": sample_state, "Porosity (%)": porosity,
-        "Permeability (mD)": permeability, "Salinity (ppm)": salinity, "NPs": nps,
-        "NPs Size (nm)": np_size, "NPs Conc. (wt%)": np_conc, "Chemical Additive": chem,
-        "Additive Conc. (wt%)": chem_conc, "Viscosity (cP)": viscosity,
-        "Oil Viscosity (cP)": oil_visc, "Oil SG": oil_sg, "API": api, "Temp.": temp,
-    }
+    return {"Rock Type": rock, "Sample State": sample_state,
+            "Porosity (%)": porosity, "Permeability (mD)": permeability}
 
 
-def ift_inputs(prefix="ift"):
+def render_fluid_fields(prefix: str, temp_key: str = "Temp.") -> dict:
+    """Salinity / temperature / oil & aqueous properties - always fixed (not optimizable).
+    Oil SG is computed from API, not collected from the user."""
     c1, c2, c3 = st.columns(3)
     with c1:
         salinity = st.number_input("Salinity (ppm)", 0.0, 200000.0, 30000.0, key=f"{prefix}_sal")
         temp = st.number_input("Temperature (C)", 15.0, 100.0, 25.0, key=f"{prefix}_temp")
-        oil_visc = st.number_input("Oil Viscosity (cP)", 0.5, 300.0, 20.0, key=f"{prefix}_oilvisc")
     with c2:
-        oil_sg = st.number_input("Oil SG", 0.6, 1.0, 0.86, key=f"{prefix}_oilsg")
-        api = st.number_input("API Gravity", 10.0, 75.0, 33.0, key=f"{prefix}_api")
-        viscosity = st.number_input("Aqueous Viscosity (cP)", 0.3, 20.0, 1.0, key=f"{prefix}_visc")
+        oil_visc = st.number_input("Oil Viscosity (cP)", 0.5, 300.0, 20.0, key=f"{prefix}_oilvisc")
+        api = st.number_input("Oil API Gravity", 10.0, 75.0, 33.0, key=f"{prefix}_api")
     with c3:
-        nps = st.selectbox("NP Type", ALL_NPS, format_func=fmt_np, key=f"{prefix}_nps")
-        np_size = st.number_input("NP Size (nm)", 0.0, 100.0, 20.0, key=f"{prefix}_npsize")
-        np_conc = st.number_input("NP Concentration (wt%)", 0.0, 2.0, 0.3, key=f"{prefix}_npconc")
-    c4, c5 = st.columns(2)
-    with c4:
-        chem = st.selectbox("Chemical Additive", ALL_CHEMS, format_func=fmt_chem, key=f"{prefix}_chem")
-    with c5:
-        chem_conc = st.number_input("Additive Concentration (wt%)", 0.0, 2.0, 0.1, key=f"{prefix}_chemconc")
+        viscosity = st.number_input("Aqueous / Nanofluid Viscosity (cP)", 0.3, 20.0, 1.0, key=f"{prefix}_visc")
+        oil_sg = sg_from_api(api)
+        st.metric("Oil SG (from API)", f"{oil_sg:.4f}")
 
     return {
-        "Salinity (ppm)": salinity, "NPs": nps, "NPs Size (nm)": np_size,
-        "NPs Conc. (wt%)": np_conc, "Chemical Additive": chem, "Additive Conc. (wt%)": chem_conc,
-        "Viscosity (cP)": viscosity, "Oil Viscosity (cP)": oil_visc, "Oil SG": oil_sg,
-        "API": api, "Temp.C": temp,
+        "Salinity (ppm)": salinity, temp_key: temp, "Oil Viscosity (cP)": oil_visc,
+        "API": api, "Oil SG": oil_sg, "Viscosity (cP)": viscosity,
     }
 
 
+def render_formulation_fields(skip: set, prefix: str) -> dict:
+    """NP type/size/conc + chemical additive type/conc - each one is omitted
+    if it's in `skip` (because it's being optimized instead of held fixed)."""
+    values = {}
+    shown_any = False
+    cols = st.columns(2)
+    with cols[0]:
+        if "NPs" not in skip:
+            values["NPs"] = st.selectbox("NP Type", ALL_NPS, format_func=fmt_np, key=f"{prefix}_nps")
+            shown_any = True
+        if "NPs Size (nm)" not in skip:
+            values["NPs Size (nm)"] = st.number_input("NP Size (nm)", 0.0, 100.0, 20.0, key=f"{prefix}_npsize")
+            shown_any = True
+        if "NPs Conc. (wt%)" not in skip:
+            values["NPs Conc. (wt%)"] = st.number_input("NP Concentration (wt%)", 0.0, 2.0, 0.3, key=f"{prefix}_npconc")
+            shown_any = True
+    with cols[1]:
+        if "Chemical Additive" not in skip:
+            values["Chemical Additive"] = st.selectbox("Chemical Additive", ALL_CHEMS, format_func=fmt_chem, key=f"{prefix}_chem")
+            shown_any = True
+        if "Additive Conc. (wt%)" not in skip:
+            values["Additive Conc. (wt%)"] = st.number_input("Additive Concentration (wt%)", 0.0, 2.0, 0.1, key=f"{prefix}_chemconc")
+            shown_any = True
+    if not shown_any:
+        st.caption("All formulation variables below are being optimized (see above).")
+    return values
+
+
+def ca_inputs(prefix="ca") -> dict:
+    st.markdown("**Reservoir**")
+    reservoir = render_reservoir_fields(prefix)
+    st.markdown("**Fluid & operating conditions**")
+    fluid = render_fluid_fields(prefix, temp_key="Temp.")
+    st.markdown("**Nanofluid formulation**")
+    formulation = render_formulation_fields(skip=set(), prefix=prefix)
+    return {**reservoir, **fluid, **formulation}
+
+
+def ift_inputs(prefix="ift") -> dict:
+    st.markdown("**Fluid & operating conditions**")
+    fluid = render_fluid_fields(prefix, temp_key="Temp.C")
+    st.markdown("**Nanofluid formulation**")
+    formulation = render_formulation_fields(skip=set(), prefix=prefix)
+    return {**fluid, **formulation}
+
+
+# --------------------------------------------------------------------------- #
+# Prediction mode                                                             #
+# --------------------------------------------------------------------------- #
 def prediction_mode(property_choice):
     if property_choice in ("Contact Angle (CA)", "Both (multi-objective)"):
         st.header("Contact Angle Prediction")
@@ -144,6 +193,9 @@ def prediction_mode(property_choice):
                        f"(95% CI: {result['ci_95_lower']:.2f} - {result['ci_95_upper']:.2f} mN/m)")
 
 
+# --------------------------------------------------------------------------- #
+# Optimization mode                                                           #
+# --------------------------------------------------------------------------- #
 def build_variable_specs(fixed_dict, bounded_dict, categorical_dict):
     variables = []
     for name, value in fixed_dict.items():
@@ -155,19 +207,13 @@ def build_variable_specs(fixed_dict, bounded_dict, categorical_dict):
     return variables
 
 
-# Friendly-label lookup used to decorate the optimizer's output (which is
-# expressed in codes, since that's what the model was trained on).
 _LABEL_MAPS = {
-    "NPs": NP_TYPE_MAP,
-    "Chemical Additive": CHEM_ADDITIVE_MAP,
-    "Rock Type": ROCK_TYPE_MAP,
-    "Sample State": SAMPLE_STATE_MAP,
+    "NPs": NP_TYPE_MAP, "Chemical Additive": CHEM_ADDITIVE_MAP,
+    "Rock Type": ROCK_TYPE_MAP, "Sample State": SAMPLE_STATE_MAP,
 }
 
 
 def humanize_formulation(formulation: dict) -> dict:
-    """Return a copy of an optimizer result dict with '<code> (<Label>)' values
-    for any categorical field, so the UI never shows a bare 'NP6' or 'chem4'."""
     out = {}
     for k, v in formulation.items():
         if k in _LABEL_MAPS and v in _LABEL_MAPS[k]:
@@ -189,35 +235,47 @@ def humanize_pareto_df(df: pd.DataFrame) -> pd.DataFrame:
 
 def optimization_mode(property_choice):
     st.header("Formulation Optimization")
+
     objective = st.selectbox("Objective", ["Minimize", "Maximize"])
     optimize_vars = st.multiselect(
-        "Variables to optimize",
-        ["NPs", "NPs Size (nm)", "NPs Conc. (wt%)", "Chemical Additive", "Additive Conc. (wt%)",
-         "Salinity (ppm)", "Temp."],
+        "Variables to optimize (formulation only)",
+        OPTIMIZABLE_FIELDS,
         default=["NPs", "NPs Conc. (wt%)", "Chemical Additive"],
+        help="Reservoir and operating conditions (rock type, porosity, permeability, "
+             "salinity, temperature, fluid properties) are always held fixed below - "
+             "only the nanofluid formulation itself can be optimized.",
     )
     n_trials = st.slider("Optimization trials", 50, 500, 200, step=50)
+    skip = set(optimize_vars)
 
-    st.subheader("Fixed conditions")
-    fixed_inputs = ca_inputs(prefix="fixed") if property_choice != "Interfacial Tension (IFT)" else ift_inputs(prefix="fixed")
+    st.subheader("Fixed reservoir / operating conditions")
+    st.caption("Any variable selected above for optimization is removed from this form.")
+
+    fixed = {}
+    if property_choice in ("Contact Angle (CA)", "Both (multi-objective)"):
+        st.markdown("**Reservoir**")
+        fixed.update(render_reservoir_fields("optfixed"))
+
+    st.markdown("**Fluid & operating conditions**")
+    if property_choice == "Interfacial Tension (IFT)":
+        fixed.update(render_fluid_fields("optfixed", temp_key="Temp.C"))
+    elif property_choice == "Both (multi-objective)":
+        fluid = render_fluid_fields("optfixed", temp_key="Temp.")
+        fluid["Temp.C"] = fluid["Temp."]   # same physical temperature fed to both models
+        fixed.update(fluid)
+    else:  # CA only
+        fixed.update(render_fluid_fields("optfixed", temp_key="Temp."))
+
+    st.markdown("**Fixed formulation variables** *(not selected for optimization)*")
+    fixed.update(render_formulation_fields(skip=skip, prefix="optfixed"))
 
     if st.button("Run Optimization"):
-        bounded = {}
+        bounded = {k: OPTIMIZABLE_BOUNDS[k] for k in optimize_vars if k in OPTIMIZABLE_BOUNDS}
         categorical = {}
-        fixed = {}
-        default_bounds = {
-            "NPs Size (nm)": (0, 100), "NPs Conc. (wt%)": (0, 1.5),
-            "Additive Conc. (wt%)": (0, 1.0), "Salinity (ppm)": (0, 180000),
-            "Temp.": (15, 90),
-        }
-        for k, v in fixed_inputs.items():
-            if k in optimize_vars:
-                if k in ("NPs", "Chemical Additive"):
-                    categorical[k] = ALL_NPS if k == "NPs" else ALL_CHEMS
-                elif k in default_bounds:
-                    bounded[k] = default_bounds[k]
-            else:
-                fixed[k] = v
+        if "NPs" in optimize_vars:
+            categorical["NPs"] = ALL_NPS
+        if "Chemical Additive" in optimize_vars:
+            categorical["Chemical Additive"] = ALL_CHEMS
 
         variables = build_variable_specs(fixed, bounded, categorical)
         direction = "minimize" if objective == "Minimize" else "maximize"
