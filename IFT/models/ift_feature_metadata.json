@@ -1,0 +1,55 @@
+{
+  "target_col": "IFT (mN/m)",
+  "log_features": [
+    "Salinity (ppm)",
+    "NPs Conc. (wt%)",
+    "Additive Conc. (wt%)",
+    "Viscosity (cP)",
+    "Oil Viscosity (cP)"
+  ],
+  "continuous_features": [
+    "Salinity (ppm)",
+    "NPs Size (nm)",
+    "NPs Conc. (wt%)",
+    "Additive Conc. (wt%)",
+    "Viscosity (cP)",
+    "Oil Viscosity (cP)",
+    "Oil SG",
+    "API",
+    "Temp.C"
+  ],
+  "categorical_features": [
+    "NPs",
+    "Chemical Additive"
+  ],
+  "scale_target": true,
+  "feature_names_out": [
+    "Salinity (ppm)",
+    "NPs Size (nm)",
+    "NPs Conc. (wt%)",
+    "Additive Conc. (wt%)",
+    "Viscosity (cP)",
+    "Oil Viscosity (cP)",
+    "Oil SG",
+    "API",
+    "Temp.C",
+    "NPs_NP0",
+    "NPs_NP1",
+    "NPs_NP10",
+    "NPs_NP2",
+    "NPs_NP3",
+    "NPs_NP4",
+    "NPs_NP6",
+    "NPs_NP7",
+    "NPs_NP8",
+    "NPs_NP9",
+    "Chemical Additive_chem0",
+    "Chemical Additive_chem1",
+    "Chemical Additive_chem2",
+    "Chemical Additive_chem3",
+    "Chemical Additive_chem4",
+    "Chemical Additive_chem5",
+    "Chemical Additive_chem6",
+    "Chemical Additive_chem7"
+  ]
+}
