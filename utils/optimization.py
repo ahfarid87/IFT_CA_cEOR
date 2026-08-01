@@ -31,6 +31,8 @@ import numpy as np
 import optuna
 import pandas as pd
 
+from .preprocessing import enforce_domain_rules
+
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
@@ -114,13 +116,22 @@ class FormulationOptimizer:
 
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
+        fixed_map = {v.name: v.value for v in variables if v.kind == "fixed"}
+
+        def _report(params: dict) -> dict:
+            # Merge in fixed values so "NPs fixed at NP0" also zeroes a
+            # searched size/conc in the reported formulation, then keep
+            # only the keys that were actually part of this trial's params.
+            corrected = enforce_domain_rules({**fixed_map, **params})
+            return {k: corrected[k] for k in params}
+
         history = [
-            {"trial": t.number, "value": t.value, **t.params}
+            {"trial": t.number, "value": t.value, **_report(t.params)}
             for t in study.trials
             if t.value is not None
         ]
         return {
-            "best_formulation": study.best_params,
+            "best_formulation": _report(study.best_params),
             "best_value": study.best_value,
             "direction": direction,
             "history": history,
@@ -191,9 +202,16 @@ class MultiObjectiveFormulationOptimizer:
 
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
+        fixed_map = {v.name: v.value for v in variables if v.kind == "fixed"}
+
+        def _report(params: dict) -> dict:
+            corrected = enforce_domain_rules({**fixed_map, **params})
+            return {k: corrected[k] for k in params}
+
         pareto = []
         for t in study.best_trials:
-            pareto.append({"trial": t.number, "objective_a": t.values[0], "objective_b": t.values[1], **t.params})
+            pareto.append({"trial": t.number, "objective_a": t.values[0], "objective_b": t.values[1],
+                            **_report(t.params)})
 
         pareto_df = pd.DataFrame(pareto).sort_values("objective_a").reset_index(drop=True)
         return {"pareto_front": pareto_df, "study": study}
