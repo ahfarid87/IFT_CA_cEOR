@@ -30,6 +30,12 @@ def regression_metrics(y_true, y_pred) -> dict:
     y_pred = np.asarray(y_pred, dtype=float)
     resid = y_true - y_pred
     mape_mask = y_true != 0
+    # RMSE computed in log1p-space (on non-negative values only) - used to
+    # build a multiplicative/asymmetric confidence interval that can never
+    # go below 0, regardless of whether the model itself was log-trained.
+    y_true_nn = np.clip(y_true, 0, None)
+    y_pred_nn = np.clip(y_pred, 0, None)
+    log_rmse = float(np.sqrt(mean_squared_error(np.log1p(y_true_nn), np.log1p(y_pred_nn))))
     return {
         "R2": float(r2_score(y_true, y_pred)),
         "RMSE": float(np.sqrt(mean_squared_error(y_true, y_pred))),
@@ -37,6 +43,7 @@ def regression_metrics(y_true, y_pred) -> dict:
         "MAPE": float(
             mean_absolute_percentage_error(y_true[mape_mask], y_pred[mape_mask]) * 100
         ) if mape_mask.any() else float("nan"),
+        "Log_RMSE": log_rmse,
         "Residual_Std": float(np.std(resid)),
         "Residual_Mean": float(np.mean(resid)),
         "Residual_Min": float(np.min(resid)),

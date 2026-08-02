@@ -124,6 +124,12 @@ class PreprocessConfig:
     continuous_features: list = field(default_factory=list)
     categorical_features: list = field(default_factory=list)
     scale_target: bool = False           # Min-Max scale the target too (CA paper does this)
+    log_target: bool = False             # ln(1+y) transform BEFORE scaling - use for heavy-tailed,
+                                          # near-zero-bounded targets (e.g. IFT) so the model is
+                                          # trained on relative rather than absolute error, and so
+                                          # predictions/CIs can never fall below `physical_min`.
+    physical_min: float = 0.0            # hard floor for predictions & CI (targets can't be negative)
+    physical_max: Optional[float] = None  # hard ceiling, e.g. 180.0 for Contact Angle (degrees)
     outlier_trim: bool = True
     outlier_low_pct: float = 1.0
     outlier_high_pct: float = 99.0
@@ -202,7 +208,9 @@ class TabularPreprocessor:
             index=df.index,
         )
 
-        y = df[self.cfg.target_col].astype(float)
+        y = df[self.cfg.target_col].astype(float).clip(lower=self.cfg.physical_min)
+        if self.cfg.log_target:
+            y = np.log1p(y - self.cfg.physical_min)
         if self.target_scaler is not None:
             y_arr = self.target_scaler.fit_transform(y.values.reshape(-1, 1)).ravel()
             y = pd.Series(y_arr, index=df.index, name=self.cfg.target_col)
@@ -249,7 +257,9 @@ class TabularPreprocessor:
         X = X.reindex(columns=self.feature_names_out_, fill_value=0.0)
 
         if has_target and self.cfg.target_col in df.columns:
-            y = df[self.cfg.target_col].astype(float)
+            y = df[self.cfg.target_col].astype(float).clip(lower=self.cfg.physical_min)
+            if self.cfg.log_target:
+                y = np.log1p(y - self.cfg.physical_min)
             if self.target_scaler is not None:
                 y_arr = self.target_scaler.transform(y.values.reshape(-1, 1)).ravel()
                 y = pd.Series(y_arr, index=df.index, name=self.cfg.target_col)
@@ -278,11 +288,13 @@ class TabularPreprocessor:
         return self.transform(df_row, has_target=False)
 
     def inverse_transform_target(self, y_scaled: np.ndarray) -> np.ndarray:
-        if self.target_scaler is None:
-            return np.asarray(y_scaled)
-        return self.target_scaler.inverse_transform(
-            np.asarray(y_scaled).reshape(-1, 1)
-        ).ravel()
+        y = np.asarray(y_scaled, dtype=float)
+        if self.target_scaler is not None:
+            y = self.target_scaler.inverse_transform(y.reshape(-1, 1)).ravel()
+        if self.cfg.log_target:
+            y = np.expm1(y) + self.cfg.physical_min
+        y = np.clip(y, self.cfg.physical_min, self.cfg.physical_max)
+        return y
 
     # ------------------------------------------------------------------ #
     # Persistence                                                         #
@@ -296,6 +308,9 @@ class TabularPreprocessor:
             "continuous_features": self.cfg.continuous_features,
             "categorical_features": self.cfg.categorical_features,
             "scale_target": self.cfg.scale_target,
+            "log_target": self.cfg.log_target,
+            "physical_min": self.cfg.physical_min,
+            "physical_max": self.cfg.physical_max,
             "feature_names_out": self.feature_names_out_,
         }
         with open(os.path.join(out_dir, f"{prefix}_feature_metadata.json"), "w") as f:
