@@ -223,6 +223,7 @@ def prediction_mode(property_choice):
         if st.button("Predict Contact Angle"):
             bundle = load_bundle(CA_DIR, "ca")
             result = bundle.predict(inputs)
+	    result = {k: (0.01 if isinstance(v, (int, float)) and v < 0 else v) for k, v in result.items()}
             st.success(f"Predicted CA: **{result['prediction']:.1f} deg** "
                        f"(95% CI: {result['ci_95_lower']:.1f} - {result['ci_95_upper']:.1f} deg)")
 
@@ -232,6 +233,7 @@ def prediction_mode(property_choice):
         if st.button("Predict IFT"):
             bundle = load_bundle(IFT_DIR, "ift")
             result = bundle.predict(inputs)
+	    result = {k: (0.01 if isinstance(v, (int, float)) and v < 0 else v) for k, v in result.items()}
             st.success(f"Predicted IFT: **{result['prediction']:.2f} mN/m** "
                        f"(95% CI: {result['ci_95_lower']:.2f} - {result['ci_95_upper']:.2f} mN/m)")
 
