@@ -32,6 +32,12 @@ class ModelBundle:
         with open(os.path.join(model_dir, f"{prefix}_feature_metadata.json")) as f:
             self.feature_metadata = json.load(f)
 
+    # Hard floor applied to any negative value that slips through, regardless
+    # of cause (e.g. a stale pickled model saved before physical_min/
+    # physical_max existed on PreprocessConfig). Neither IFT nor Contact
+    # Angle can physically be negative.
+    NEGATIVE_FLOOR = 0.01
+
     def predict(self, input_dict: dict) -> dict:
         """
         Predict from a dict of raw (un-transformed) feature values, e.g.:
@@ -44,20 +50,22 @@ class ModelBundle:
 
         Returns the predicted value plus an approximate 95% confidence
         interval built in log1p-space (using the validation-set Log_RMSE)
-        and then inverted back to real units. This guarantees the interval
-        (and the point prediction itself) can never fall below the target's
-        physical minimum (0) or exceed its physical maximum, if any (e.g.
-        180 degrees for Contact Angle) - unlike a naive symmetric
-        `pred +/- 1.96*RMSE` interval on the raw scale, which can and does
-        go negative for predictions near the physical floor.
+        and then inverted back to real units. The preprocessor already
+        clips to [physical_min, physical_max], and as a final safety net
+        below, any value that is still negative (e.g. from an older saved
+        model whose config predates physical_min/physical_max) is floored
+        at NEGATIVE_FLOOR (0.01) rather than shown as a physically
+        impossible negative IFT/Contact Angle.
         """
         X = self.preprocessor.transform_single(input_dict)
         y_scaled = self.model.predict(X)
         y = self.preprocessor.inverse_transform_target(y_scaled)
-        pred = float(y[0])   # already clipped to [physical_min, physical_max]
+        pred = float(y[0])   # normally already clipped to [physical_min, physical_max]
 
-        phys_min = self.preprocessor.cfg.physical_min
-        phys_max = self.preprocessor.cfg.physical_max
+        # getattr(..., default) guards against an older pickled preprocessor
+        # whose PreprocessConfig predates these fields.
+        phys_min = getattr(self.preprocessor.cfg, "physical_min", 0.0) or 0.0
+        phys_max = getattr(self.preprocessor.cfg, "physical_max", None)
 
         split_metrics = self.metrics.get("Validation") or self.metrics.get("Testing") or {}
         rmse = split_metrics.get("RMSE")
@@ -72,6 +80,15 @@ class ModelBundle:
             if phys_max is not None:
                 ci_upper = min(phys_max, ci_upper)
                 ci_lower = min(ci_lower, ci_upper)
+
+        def _floor_negative(x):
+            if x is None:
+                return None
+            return self.NEGATIVE_FLOOR if x < 0 else x
+
+        pred = _floor_negative(pred)
+        ci_lower = _floor_negative(ci_lower)
+        ci_upper = _floor_negative(ci_upper)
 
         return {
             "prediction": pred,
