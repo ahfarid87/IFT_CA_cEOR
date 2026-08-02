@@ -89,13 +89,6 @@ class ModelBundle:
         pred = _floor_negative(pred)
         ci_lower = _floor_negative(ci_lower)
         ci_upper = _floor_negative(ci_upper)
-	pred = max(0.01, pred)
-
-	if ci_lower is not None:
-    		ci_lower = max(0.01, ci_lower)
-
-	if ci_upper is not None:
-    		ci_upper = max(0.01, ci_upper)
         return {
             "prediction": pred,
             "ci_95_lower": ci_lower,
